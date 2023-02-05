@@ -53,7 +53,7 @@ func (r *reader) Seek(offset int64, whence int) (int64, error) {
 		panic("implement me")
 	}
 	r.offset = int(offset)
-	return 0, nil
+	return int64(r.offset), nil
 }
 
 func (r *reader) Close() error {

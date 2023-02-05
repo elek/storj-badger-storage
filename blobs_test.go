@@ -8,6 +8,97 @@ import (
 	"testing"
 )
 
+func TestMoveToTrash(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
+	require.NoError(t, err)
+
+	ref1 := storage.BlobRef{
+		Namespace: []byte("ns"),
+		Key:       []byte("key1"),
+	}
+
+	out, err := store.Create(ctx, ref1, 10)
+	require.NoError(t, err)
+	_, err = out.Write([]byte("1234567890"))
+	require.NoError(t, err)
+	require.NoError(t, out.Commit(ctx))
+
+	require.NoError(t, store.Trash(ctx, ref1))
+
+	_, err = store.Open(ctx, ref1)
+	require.Error(t, err)
+
+	trash, err := store.RestoreTrash(ctx, []byte("ns"))
+	require.NoError(t, err)
+
+	require.Equal(t, len(trash), 1)
+
+	a, err := store.Open(ctx, ref1)
+	require.NoError(t, err)
+
+	all, err := io.ReadAll(a)
+	require.NoError(t, err)
+
+	require.Equal(t, []byte("1234567890"), all)
+
+}
+
+func TestWriteWithSeek(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+	//
+	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
+	require.NoError(t, err)
+	//store, err := filestore.NewAt(zap.NewNop(), "/tmp/q", filestore.Config{
+	//	WriteBufferSize: 1024,
+	//})
+	//require.NoError(t, err)
+
+	ref1 := storage.BlobRef{
+		Namespace: []byte("ns"),
+		Key:       []byte("key1"),
+	}
+
+	out, err := store.Create(ctx, ref1, 10)
+	require.NoError(t, err)
+
+	_, err = out.Seek(10, io.SeekStart)
+	require.NoError(t, err)
+
+	_, err = out.Write([]byte("1234567890"))
+	require.NoError(t, err)
+
+	_, err = out.Write([]byte("abcdefghijkl"))
+	require.NoError(t, err)
+
+	_, err = out.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	_, err = out.Write([]byte("ST"))
+	require.NoError(t, err)
+
+	_, err = out.Write([]byte("MNB"))
+	require.NoError(t, err)
+
+	_, err = out.Seek(31, io.SeekStart)
+	require.NoError(t, err)
+
+	require.NoError(t, out.Commit(ctx))
+
+	a, err := store.Open(ctx, ref1)
+	require.NoError(t, err)
+	defer a.Close()
+
+	all, err := io.ReadAll(a)
+	require.NoError(t, err)
+
+	require.Equal(t, []byte("STMNB\x00\x00\x00\x00\x001234567890abcdefghijk"), all)
+
+}
+
 func TestReopen(t *testing.T) {
 	ctx := testcontext.New(t)
 	defer ctx.Cleanup()

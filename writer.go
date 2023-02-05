@@ -45,7 +45,7 @@ func (w *writer) Commit(ctx context.Context) error {
 		return errs.New("Already committed")
 	}
 	err := w.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key(w.ref), w.buffer[:w.length])
+		return txn.Set(key(w.ref), w.buffer[:w.offset])
 	})
 	w.buffer = nil
 	return err
@@ -53,11 +53,15 @@ func (w *writer) Commit(ctx context.Context) error {
 }
 
 func key(ref storage.BlobRef) []byte {
-	return append(ref.Namespace, ref.Key...)
+	return append(append(blobPrefix, ref.Namespace...), ref.Key...)
+}
+
+func trashKey(ref storage.BlobRef) []byte {
+	return append(append(trashPrefix, ref.Namespace...), ref.Key...)
 }
 
 func (w *writer) Size() (int64, error) {
-	return int64(w.length), nil
+	return int64(w.offset), nil
 }
 
 func (w *writer) StorageFormatVersion() storage.FormatVersion {

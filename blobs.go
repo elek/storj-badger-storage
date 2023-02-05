@@ -3,9 +3,10 @@ package badger
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/zeebo/errs"
-	"io/fs"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"storj.io/common/storj"
@@ -14,7 +15,10 @@ import (
 	"time"
 )
 
-var namespacePrefix = []byte("namespace")
+var namespacePrefix = []byte("nmspc")
+var blobPrefix = []byte("blobs")
+var trashPrefix = []byte("trash")
+
 var verificationFileName = "storage-badger-verification"
 
 type BlobStore struct {
@@ -24,65 +28,6 @@ type BlobStore struct {
 }
 
 var _ storage.Blobs = &BlobStore{}
-
-type BlobInfo struct {
-	ref  storage.BlobRef
-	size int64
-	name string
-}
-
-func (i BlobInfo) BlobRef() storage.BlobRef {
-	return i.ref
-}
-
-func (i BlobInfo) StorageFormatVersion() storage.FormatVersion {
-	return filestore.FormatV1
-}
-
-func (i BlobInfo) FullPath(ctx context.Context) (string, error) {
-	return "", nil
-}
-
-func (i BlobInfo) Stat(ctx context.Context) (os.FileInfo, error) {
-	return FileInfo{
-		name: i.name,
-		size: i.size,
-	}, nil
-}
-
-var _ storage.BlobInfo = BlobInfo{}
-
-type FileInfo struct {
-	name string
-	size int64
-}
-
-func (f FileInfo) Name() string {
-	return f.name
-}
-
-func (f FileInfo) Size() int64 {
-	return f.size
-}
-
-func (f FileInfo) Mode() fs.FileMode {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (f FileInfo) ModTime() time.Time {
-	return time.Now()
-}
-
-func (f FileInfo) IsDir() bool {
-	return false
-}
-
-func (f FileInfo) Sys() any {
-	return ""
-}
-
-var _ os.FileInfo = &FileInfo{}
 
 func NewBlobStore(dir string) (*BlobStore, error) {
 	db, err := badger.Open(badger.DefaultOptions(dir))
@@ -134,33 +79,106 @@ func (b *BlobStore) DeleteWithStorageFormat(ctx context.Context, ref storage.Blo
 }
 
 func (b *BlobStore) DeleteNamespace(ctx context.Context, ref []byte) (err error) {
-	return nil
+	ns := append(namespacePrefix, ref...)
+	return b.db.Update(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(ns); it.ValidForPrefix(ns); it.Next() {
+			err = txn.Delete(it.Item().Key())
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (b *BlobStore) Trash(ctx context.Context, ref storage.BlobRef) error {
-	return nil
+	return b.db.Update(func(txn *badger.Txn) error {
+		return b.move(txn, key(ref), trashKey(ref))
+	})
+}
+
+func (b *BlobStore) move(txn *badger.Txn, from []byte, to []byte) error {
+	item, err := txn.Get(from)
+	if err != nil {
+		return err
+	}
+	err = item.Value(func(val []byte) error {
+		return txn.Set(to, val)
+	})
+	if err != nil {
+		return err
+	}
+	return txn.Delete(from)
 }
 
 func (b *BlobStore) RestoreTrash(ctx context.Context, namespace []byte) ([][]byte, error) {
-	return [][]byte{}, nil
+	var keys [][]byte
+	err := b.db.Update(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(trashPrefix); it.ValidForPrefix(trashPrefix); it.Next() {
+			key := it.Item().Key()
+			keys = append(keys, key)
+			origKey := append(blobPrefix, key[len(trashPrefix):]...)
+			err := b.move(txn, key, origKey)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return keys, err
 }
 
 func (b *BlobStore) EmptyTrash(ctx context.Context, namespace []byte, trashedBefore time.Time) (int64, [][]byte, error) {
-	return 0, [][]byte{}, nil
+	var keys [][]byte
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(trashPrefix); it.ValidForPrefix(trashPrefix); it.Next() {
+			key := it.Item().Key()
+			keys = append(keys, key)
+			err := txn.Delete(key)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return 0, keys, err
 }
 
 func (b *BlobStore) Stat(ctx context.Context, ref storage.BlobRef) (storage.BlobInfo, error) {
-	return nil, nil
+	var size int64
+	err := b.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(key(ref))
+		if err != nil {
+			return errs.Wrap(err)
+		}
+		err = item.Value(func(val []byte) error {
+			size = int64(len(val))
+			return nil
+		})
+		return err
+	})
+	return BlobInfo{
+		ref:  ref,
+		size: size,
+	}, err
 }
 
 func (b *BlobStore) StatWithStorageFormat(ctx context.Context, ref storage.BlobRef, formatVer storage.FormatVersion) (storage.BlobInfo, error) {
-	//TODO implement me
-	panic("implement me")
+	if formatVer != filestore.FormatV1 {
+		return nil, errs.New("Unsupported format")
+	}
+	return b.Stat(ctx, ref)
 }
 
 func (b *BlobStore) FreeSpace(ctx context.Context) (int64, error) {
-	//TODO implement me
-	panic("implement me")
+	info, err := diskInfoFromPath(b.dir)
+	return info.AvailableSpace, err
 }
 
 func (b *BlobStore) CheckWritability(ctx context.Context) error {
@@ -168,17 +186,46 @@ func (b *BlobStore) CheckWritability(ctx context.Context) error {
 }
 
 func (b *BlobStore) SpaceUsedForTrash(ctx context.Context) (int64, error) {
-	return 0, nil
+	s := int64(0)
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(trashPrefix); it.ValidForPrefix(trashPrefix); it.Next() {
+			item := it.Item()
+			s += item.ValueSize()
+		}
+		return nil
+	})
+	return s, err
 }
 
 func (b *BlobStore) SpaceUsedForBlobs(ctx context.Context) (int64, error) {
-	//TODO implement me
-	panic("implement me")
+	s := int64(0)
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(namespacePrefix); it.ValidForPrefix(namespacePrefix); it.Next() {
+			item := it.Item()
+			s += item.ValueSize()
+		}
+		return nil
+	})
+	return s, err
 }
 
 func (b *BlobStore) SpaceUsedForBlobsInNamespace(ctx context.Context, namespace []byte) (int64, error) {
-	//TODO implement me
-	panic("implement me")
+	s := int64(0)
+	ns := append(namespacePrefix, namespace...)
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(ns); it.ValidForPrefix(ns); it.Next() {
+			item := it.Item()
+			s += item.ValueSize()
+		}
+		return nil
+	})
+	return s, err
 }
 
 func (b *BlobStore) ListNamespaces(ctx context.Context) ([][]byte, error) {
@@ -189,14 +236,14 @@ func (b *BlobStore) WalkNamespace(ctx context.Context, namespace []byte, walkFun
 	err := b.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
-		for it.Seek(namespace); it.ValidForPrefix(namespace); it.Next() {
+		for it.Seek(ns(namespace)); it.ValidForPrefix(ns(namespace)); it.Next() {
 			item := it.Item()
 			err := walkFunc(BlobInfo{
 				ref: storage.BlobRef{
 					Namespace: namespace,
-					Key:       item.Key()[len(namespace):],
+					Key:       item.Key()[len(ns(namespace)):],
 				},
-				name: string(item.Key()[len(namespace):]),
+				name: string(item.Key()[len(ns(namespace)):]),
 				// This is just estimation!!!!
 				size: item.ValueSize(),
 			})
@@ -207,6 +254,10 @@ func (b *BlobStore) WalkNamespace(ctx context.Context, namespace []byte, walkFun
 		return nil
 	})
 	return err
+}
+
+func ns(namespace []byte) []byte {
+	return append(blobPrefix, namespace...)
 }
 
 func (b *BlobStore) CreateVerificationFile(ctx context.Context, id storj.NodeID) error {
@@ -272,4 +323,24 @@ func bytesEq(ns []byte, namespace []byte) bool {
 		}
 	}
 	return true
+}
+
+func diskInfoFromPath(path string) (info DiskInfo, err error) {
+	var stat unix.Statfs_t
+	err = unix.Statfs(path, &stat)
+	if err != nil {
+		return DiskInfo{"", -1}, err
+	}
+
+	// the Bsize size depends on the OS and unconvert gives a false-positive
+	availableSpace := int64(stat.Bavail) * int64(stat.Bsize) //nolint: unconvert
+	filesystemID := fmt.Sprintf("%08x%08x", stat.Fsid.Val[0], stat.Fsid.Val[1])
+
+	return DiskInfo{filesystemID, availableSpace}, nil
+}
+
+// DiskInfo contains statistics about this dir.
+type DiskInfo struct {
+	ID             string
+	AvailableSpace int64
 }
