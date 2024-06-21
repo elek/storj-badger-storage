@@ -4,8 +4,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"io"
 	"storj.io/common/testcontext"
-	"storj.io/storj/storage"
+	"storj.io/storj/storagenode/blobstore"
 	"testing"
+	"time"
 )
 
 func TestMoveToTrash(t *testing.T) {
@@ -15,18 +16,18 @@ func TestMoveToTrash(t *testing.T) {
 	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
 	require.NoError(t, err)
 
-	ref1 := storage.BlobRef{
+	ref1 := blobstore.BlobRef{
 		Namespace: []byte("ns"),
 		Key:       []byte("key1"),
 	}
 
-	out, err := store.Create(ctx, ref1, 10)
+	out, err := store.Create(ctx, ref1)
 	require.NoError(t, err)
 	_, err = out.Write([]byte("1234567890"))
 	require.NoError(t, err)
 	require.NoError(t, out.Commit(ctx))
 
-	require.NoError(t, store.Trash(ctx, ref1))
+	require.NoError(t, store.Trash(ctx, ref1, time.Now()))
 
 	_, err = store.Open(ctx, ref1)
 	require.Error(t, err)
@@ -57,12 +58,12 @@ func TestWriteWithSeek(t *testing.T) {
 	//})
 	//require.NoError(t, err)
 
-	ref1 := storage.BlobRef{
+	ref1 := blobstore.BlobRef{
 		Namespace: []byte("ns"),
 		Key:       []byte("key1"),
 	}
 
-	out, err := store.Create(ctx, ref1, 10)
+	out, err := store.Create(ctx, ref1)
 	require.NoError(t, err)
 
 	_, err = out.Seek(10, io.SeekStart)
@@ -108,10 +109,10 @@ func TestReopen(t *testing.T) {
 	store, err := NewBlobStore(d)
 	require.NoError(t, err)
 
-	create, err := store.Create(ctx, storage.BlobRef{
+	create, err := store.Create(ctx, blobstore.BlobRef{
 		Namespace: []byte("ns"),
 		Key:       []byte("key1"),
-	}, -1)
+	})
 	require.NoError(t, err)
 
 	_, err = create.Write([]byte("test"))
@@ -140,11 +141,11 @@ func TestMultiWrite(t *testing.T) {
 	store, err := NewBlobStore(d)
 	require.NoError(t, err)
 
-	ref := storage.BlobRef{
+	ref := blobstore.BlobRef{
 		Namespace: []byte("ns"),
 		Key:       []byte("key1"),
 	}
-	create, err := store.Create(ctx, ref, -1)
+	create, err := store.Create(ctx, ref)
 	require.NoError(t, err)
 
 	for i := 0; i < 10; i++ {

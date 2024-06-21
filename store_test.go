@@ -17,7 +17,7 @@ import (
 
 	"storj.io/common/testcontext"
 	"storj.io/common/testrand"
-	"storj.io/storj/storage"
+	"storj.io/storj/storagenode/blobstore"
 )
 
 const (
@@ -39,19 +39,19 @@ func TestStoreLoad(t *testing.T) {
 	data := testrand.Bytes(blobSize)
 	temp := make([]byte, len(data))
 
-	refs := []storage.BlobRef{}
+	refs := []blobstore.BlobRef{}
 
 	namespace := testrand.Bytes(32)
 
 	// store without size
 	for i := 0; i < repeatCount; i++ {
-		ref := storage.BlobRef{
+		ref := blobstore.BlobRef{
 			Namespace: namespace,
 			Key:       testrand.Bytes(32),
 		}
 		refs = append(refs, ref)
 
-		writer, err := store.Create(ctx, ref, -1)
+		writer, err := store.Create(ctx, ref)
 		require.NoError(t, err)
 
 		n, err := writer.Write(data)
@@ -68,13 +68,13 @@ func TestStoreLoad(t *testing.T) {
 	namespace = testrand.Bytes(32)
 	// store with size
 	for i := 0; i < repeatCount; i++ {
-		ref := storage.BlobRef{
+		ref := blobstore.BlobRef{
 			Namespace: namespace,
 			Key:       testrand.Bytes(32),
 		}
 		refs = append(refs, ref)
 
-		writer, err := store.Create(ctx, ref, int64(len(data)))
+		writer, err := store.Create(ctx, ref)
 		require.NoError(t, err)
 
 		n, err := writer.Write(data)
@@ -87,13 +87,13 @@ func TestStoreLoad(t *testing.T) {
 	namespace = testrand.Bytes(32)
 	// store with larger size
 	{
-		ref := storage.BlobRef{
+		ref := blobstore.BlobRef{
 			Namespace: namespace,
 			Key:       testrand.Bytes(32),
 		}
 		refs = append(refs, ref)
 
-		writer, err := store.Create(ctx, ref, int64(len(data)*2))
+		writer, err := store.Create(ctx, ref)
 		require.NoError(t, err)
 
 		n, err := writer.Write(data)
@@ -106,12 +106,12 @@ func TestStoreLoad(t *testing.T) {
 	namespace = testrand.Bytes(32)
 	// store with error
 	{
-		ref := storage.BlobRef{
+		ref := blobstore.BlobRef{
 			Namespace: namespace,
 			Key:       testrand.Bytes(32),
 		}
 
-		writer, err := store.Create(ctx, ref, -1)
+		writer, err := store.Create(ctx, ref)
 		require.NoError(t, err)
 
 		n, err := writer.Write(data)
@@ -414,7 +414,7 @@ func TestStoreTraversals(t *testing.T) {
 	// invent some namespaces and store stuff in them
 	type namespaceWithBlobs struct {
 		namespace []byte
-		blobs     []storage.BlobRef
+		blobs     []blobstore.BlobRef
 	}
 	const numNamespaces = 4
 	recordsToInsert := make([]namespaceWithBlobs, numNamespaces)
@@ -427,13 +427,13 @@ func TestStoreTraversals(t *testing.T) {
 		recordsToInsert[i].namespace[len(namespaceBase)-1] = byte(i)
 
 		// put varying numbers of blobs in the namespaces
-		recordsToInsert[i].blobs = make([]storage.BlobRef, i+1)
+		recordsToInsert[i].blobs = make([]blobstore.BlobRef, i+1)
 		for j := range recordsToInsert[i].blobs {
-			recordsToInsert[i].blobs[j] = storage.BlobRef{
+			recordsToInsert[i].blobs[j] = blobstore.BlobRef{
 				Namespace: recordsToInsert[i].namespace,
 				Key:       testrand.Bytes(keySize),
 			}
-			blobWriter, err := store.Create(ctx, recordsToInsert[i].blobs[j], 0)
+			blobWriter, err := store.Create(ctx, recordsToInsert[i].blobs[j])
 			require.NoError(t, err)
 			// also vary the sizes of the blobs so we can check Stat results
 			_, err = blobWriter.Write(testrand.Bytes(memory.Size(j)))
@@ -465,7 +465,7 @@ func TestStoreTraversals(t *testing.T) {
 		// keep track of which blobs we visit with WalkNamespace
 		found := make([]bool, len(expected.blobs))
 
-		err = store.WalkNamespace(ctx, expected.namespace, func(info storage.BlobInfo) error {
+		err = store.WalkNamespace(ctx, expected.namespace, "", func(info blobstore.BlobInfo) error {
 			gotBlobRef := info.BlobRef()
 			assert.Equal(t, expected.namespace, gotBlobRef.Namespace)
 			// find which blob this is in expected.blobs
@@ -490,7 +490,6 @@ func TestStoreTraversals(t *testing.T) {
 			//basePath := filepath.Base(fullPath)
 			//assert.Equal(t, nameFromStat, basePath)
 			assert.Equal(t, int64(blobIdentified), stat.Size())
-			assert.False(t, stat.IsDir())
 			return nil
 		})
 		require.NoError(t, err)
@@ -505,7 +504,7 @@ func TestStoreTraversals(t *testing.T) {
 
 	// test WalkNamespace on a nonexistent namespace also
 	namespaceBase[len(namespaceBase)-1] = byte(numNamespaces)
-	err = store.WalkNamespace(ctx, namespaceBase, func(_ storage.BlobInfo) error {
+	err = store.WalkNamespace(ctx, namespaceBase, "", func(_ blobstore.BlobInfo) error {
 		t.Fatal("this should not have been called")
 		return nil
 	})
@@ -514,7 +513,7 @@ func TestStoreTraversals(t *testing.T) {
 	// check that WalkNamespace stops iterating after an error return
 	iterations := 0
 	expectedErr := errs.New("an expected error")
-	err = store.WalkNamespace(ctx, recordsToInsert[numNamespaces-1].namespace, func(_ storage.BlobInfo) error {
+	err = store.WalkNamespace(ctx, recordsToInsert[numNamespaces-1].namespace, "", func(_ blobstore.BlobInfo) error {
 		iterations++
 		if iterations == 2 {
 			return expectedErr
@@ -831,12 +830,12 @@ func TestBlobMemoryBuffer(t *testing.T) {
 	require.NoError(t, err)
 	defer ctx.Check(store.Close)
 
-	ref := storage.BlobRef{
+	ref := blobstore.BlobRef{
 		Namespace: testrand.Bytes(32),
 		Key:       testrand.Bytes(32),
 	}
 
-	writer, err := store.Create(ctx, ref, size)
+	writer, err := store.Create(ctx, ref)
 	require.NoError(t, err)
 
 	for _, v := range rand.Perm(size) {

@@ -2,24 +2,23 @@ package badger
 
 import (
 	"context"
-	"io/fs"
-	"os"
-	"storj.io/storj/storage"
-	"storj.io/storj/storage/filestore"
+	"storj.io/storj/storagenode/blobstore"
+	"storj.io/storj/storagenode/blobstore/filestore"
 	"time"
 )
 
 type BlobInfo struct {
-	ref  storage.BlobRef
-	size int64
-	name string
+	ref     blobstore.BlobRef
+	size    int64
+	name    string
+	modTime time.Time
 }
 
-func (i BlobInfo) BlobRef() storage.BlobRef {
+func (i BlobInfo) BlobRef() blobstore.BlobRef {
 	return i.ref
 }
 
-func (i BlobInfo) StorageFormatVersion() storage.FormatVersion {
+func (i BlobInfo) StorageFormatVersion() blobstore.FormatVersion {
 	return filestore.FormatV1
 }
 
@@ -27,18 +26,24 @@ func (i BlobInfo) FullPath(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-func (i BlobInfo) Stat(ctx context.Context) (os.FileInfo, error) {
+func (i BlobInfo) Stat(ctx context.Context) (blobstore.FileInfo, error) {
 	return FileInfo{
-		name: i.name,
-		size: i.size,
+		name:    i.name,
+		size:    i.size,
+		modTime: i.modTime,
 	}, nil
 }
 
-var _ storage.BlobInfo = BlobInfo{}
+var _ blobstore.BlobInfo = BlobInfo{}
 
 type FileInfo struct {
-	name string
-	size int64
+	name    string
+	size    int64
+	modTime time.Time
+}
+
+func (f FileInfo) ModTime() time.Time {
+	return f.modTime
 }
 
 func (f FileInfo) Name() string {
@@ -49,21 +54,4 @@ func (f FileInfo) Size() int64 {
 	return f.size
 }
 
-func (f FileInfo) Mode() fs.FileMode {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (f FileInfo) ModTime() time.Time {
-	return time.Now()
-}
-
-func (f FileInfo) IsDir() bool {
-	return false
-}
-
-func (f FileInfo) Sys() any {
-	return ""
-}
-
-var _ os.FileInfo = &FileInfo{}
+var _ blobstore.FileInfo = &FileInfo{}

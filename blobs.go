@@ -10,14 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"storj.io/common/storj"
-	"storj.io/storj/storage"
-	"storj.io/storj/storage/filestore"
+	"storj.io/storj/storagenode/blobstore"
+	"storj.io/storj/storagenode/blobstore/filestore"
 	"time"
 )
 
 var namespacePrefix = []byte("nmspc")
 var blobPrefix = []byte("blobs")
 var trashPrefix = []byte("trash")
+var statPrefix = []byte("stats")
 
 var verificationFileName = "storage-badger-verification"
 
@@ -27,7 +28,26 @@ type BlobStore struct {
 	dir        string
 }
 
-var _ storage.Blobs = &BlobStore{}
+func (b *BlobStore) CheckWritability(ctx context.Context) error {
+	return nil
+}
+
+func (b *BlobStore) DeleteTrashNamespace(ctx context.Context, namespace []byte) (err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (b *BlobStore) TryRestoreTrashBlob(ctx context.Context, ref blobstore.BlobRef) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (b *BlobStore) DiskInfo(ctx context.Context) (blobstore.DiskInfo, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+var _ blobstore.Blobs = &BlobStore{}
 
 func NewBlobStore(dir string) (*BlobStore, error) {
 	db, err := badger.Open(badger.DefaultOptions(dir))
@@ -49,29 +69,29 @@ func NewBlobStore(dir string) (*BlobStore, error) {
 		namespaces: namespaces,
 	}, nil
 }
-func (b *BlobStore) Create(ctx context.Context, ref storage.BlobRef, size int64) (storage.BlobWriter, error) {
+func (b *BlobStore) Create(ctx context.Context, ref blobstore.BlobRef) (blobstore.BlobWriter, error) {
 	err := b.ensureNamespace(ref)
 	return NewWriter(b.db, ref), err
 }
 
-func (b *BlobStore) Open(ctx context.Context, ref storage.BlobRef) (storage.BlobReader, error) {
+func (b *BlobStore) Open(ctx context.Context, ref blobstore.BlobRef) (blobstore.BlobReader, error) {
 	return NewReader(b.db, ref)
 }
 
-func (b *BlobStore) OpenWithStorageFormat(ctx context.Context, ref storage.BlobRef, formatVer storage.FormatVersion) (storage.BlobReader, error) {
+func (b *BlobStore) OpenWithStorageFormat(ctx context.Context, ref blobstore.BlobRef, formatVer blobstore.FormatVersion) (blobstore.BlobReader, error) {
 	if formatVer != filestore.FormatV1 {
 		return nil, errs.New("Unsupported format")
 	}
 	return b.Open(ctx, ref)
 }
 
-func (b *BlobStore) Delete(ctx context.Context, ref storage.BlobRef) error {
+func (b *BlobStore) Delete(ctx context.Context, ref blobstore.BlobRef) error {
 	return b.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(key(ref))
 	})
 }
 
-func (b *BlobStore) DeleteWithStorageFormat(ctx context.Context, ref storage.BlobRef, formatVer storage.FormatVersion) error {
+func (b *BlobStore) DeleteWithStorageFormat(ctx context.Context, ref blobstore.BlobRef, formatVer blobstore.FormatVersion) error {
 	if formatVer != filestore.FormatV1 {
 		return errs.New("Unsupported format")
 	}
@@ -80,6 +100,7 @@ func (b *BlobStore) DeleteWithStorageFormat(ctx context.Context, ref storage.Blo
 
 func (b *BlobStore) DeleteNamespace(ctx context.Context, ref []byte) (err error) {
 	ns := append(namespacePrefix, ref...)
+	//TODO: remove namespaces from b.namespaces
 	return b.db.Update(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
@@ -93,7 +114,7 @@ func (b *BlobStore) DeleteNamespace(ctx context.Context, ref []byte) (err error)
 	})
 }
 
-func (b *BlobStore) Trash(ctx context.Context, ref storage.BlobRef) error {
+func (b *BlobStore) Trash(ctx context.Context, ref blobstore.BlobRef, timestamp time.Time) error {
 	return b.db.Update(func(txn *badger.Txn) error {
 		return b.move(txn, key(ref), trashKey(ref))
 	})
@@ -150,7 +171,7 @@ func (b *BlobStore) EmptyTrash(ctx context.Context, namespace []byte, trashedBef
 	return 0, keys, err
 }
 
-func (b *BlobStore) Stat(ctx context.Context, ref storage.BlobRef) (storage.BlobInfo, error) {
+func (b *BlobStore) Stat(ctx context.Context, ref blobstore.BlobRef) (blobstore.BlobInfo, error) {
 	var size int64
 	err := b.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key(ref))
@@ -169,20 +190,11 @@ func (b *BlobStore) Stat(ctx context.Context, ref storage.BlobRef) (storage.Blob
 	}, err
 }
 
-func (b *BlobStore) StatWithStorageFormat(ctx context.Context, ref storage.BlobRef, formatVer storage.FormatVersion) (storage.BlobInfo, error) {
+func (b *BlobStore) StatWithStorageFormat(ctx context.Context, ref blobstore.BlobRef, formatVer blobstore.FormatVersion) (blobstore.BlobInfo, error) {
 	if formatVer != filestore.FormatV1 {
 		return nil, errs.New("Unsupported format")
 	}
 	return b.Stat(ctx, ref)
-}
-
-func (b *BlobStore) FreeSpace(ctx context.Context) (int64, error) {
-	info, err := diskInfoFromPath(b.dir)
-	return info.AvailableSpace, err
-}
-
-func (b *BlobStore) CheckWritability(ctx context.Context) error {
-	return nil
 }
 
 func (b *BlobStore) SpaceUsedForTrash(ctx context.Context) (int64, error) {
@@ -232,14 +244,14 @@ func (b *BlobStore) ListNamespaces(ctx context.Context) ([][]byte, error) {
 	return b.namespaces, nil
 }
 
-func (b *BlobStore) WalkNamespace(ctx context.Context, namespace []byte, walkFunc func(storage.BlobInfo) error) error {
+func (b *BlobStore) WalkNamespace(ctx context.Context, namespace []byte, startFromPrefix string, walkFunc func(blobstore.BlobInfo) error) error {
 	err := b.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Seek(ns(namespace)); it.ValidForPrefix(ns(namespace)); it.Next() {
 			item := it.Item()
 			err := walkFunc(BlobInfo{
-				ref: storage.BlobRef{
+				ref: blobstore.BlobRef{
 					Namespace: namespace,
 					Key:       item.Key()[len(ns(namespace)):],
 				},
@@ -292,7 +304,7 @@ func (b *BlobStore) Close() error {
 	return b.db.Close()
 }
 
-func (b *BlobStore) ensureNamespace(ref storage.BlobRef) error {
+func (b *BlobStore) ensureNamespace(ref blobstore.BlobRef) error {
 	for _, ns := range b.namespaces {
 		if bytesEq(ns, ref.Namespace) {
 			return nil
@@ -304,11 +316,6 @@ func (b *BlobStore) ensureNamespace(ref storage.BlobRef) error {
 	if err != nil {
 		return err
 	}
-
-	if err != nil {
-		return err
-	}
-
 	b.namespaces = append(b.namespaces, ref.Namespace)
 	return nil
 }

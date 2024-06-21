@@ -5,19 +5,20 @@ import (
 	badger "github.com/dgraph-io/badger/v3"
 	"github.com/zeebo/errs"
 	"io"
-	"storj.io/storj/storage"
-	"storj.io/storj/storage/filestore"
+	"storj.io/storj/storagenode/blobstore/filestore"
+
+	"storj.io/storj/storagenode/blobstore"
 )
 
 type writer struct {
 	offset int
 	length int
 	buffer []byte
-	ref    storage.BlobRef
+	ref    blobstore.BlobRef
 	db     *badger.DB
 }
 
-func NewWriter(db *badger.DB, ref storage.BlobRef) *writer {
+func NewWriter(db *badger.DB, ref blobstore.BlobRef) *writer {
 	return &writer{
 		db:     db,
 		ref:    ref,
@@ -52,11 +53,11 @@ func (w *writer) Commit(ctx context.Context) error {
 
 }
 
-func key(ref storage.BlobRef) []byte {
+func key(ref blobstore.BlobRef) []byte {
 	return append(append(blobPrefix, ref.Namespace...), ref.Key...)
 }
 
-func trashKey(ref storage.BlobRef) []byte {
+func trashKey(ref blobstore.BlobRef) []byte {
 	return append(append(trashPrefix, ref.Namespace...), ref.Key...)
 }
 
@@ -64,7 +65,7 @@ func (w *writer) Size() (int64, error) {
 	return int64(w.offset), nil
 }
 
-func (w *writer) StorageFormatVersion() storage.FormatVersion {
+func (w *writer) StorageFormatVersion() blobstore.FormatVersion {
 	return filestore.FormatV1
 }
 

@@ -3,8 +3,8 @@ package badger
 import (
 	badger "github.com/dgraph-io/badger/v3"
 	"io"
-	"storj.io/storj/storage"
-	"storj.io/storj/storage/filestore"
+	"storj.io/storj/storagenode/blobstore"
+	"storj.io/storj/storagenode/blobstore/filestore"
 )
 
 type reader struct {
@@ -13,9 +13,9 @@ type reader struct {
 	buffer []byte
 }
 
-var _ storage.BlobReader = &reader{}
+var _ blobstore.BlobReader = &reader{}
 
-func NewReader(db *badger.DB, ref storage.BlobRef) (storage.BlobReader, error) {
+func NewReader(db *badger.DB, ref blobstore.BlobRef) (blobstore.BlobReader, error) {
 	r := reader{}
 	err := db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key(ref))
@@ -65,6 +65,6 @@ func (r *reader) Size() (int64, error) {
 	return int64(len(r.buffer)), nil
 }
 
-func (r *reader) StorageFormatVersion() storage.FormatVersion {
+func (r *reader) StorageFormatVersion() blobstore.FormatVersion {
 	return filestore.FormatV1
 }
