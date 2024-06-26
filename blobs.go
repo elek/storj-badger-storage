@@ -39,7 +39,11 @@ func (b *BlobStore) TryRestoreTrashBlob(ctx context.Context, ref blobstore.BlobR
 }
 
 func (b *BlobStore) DiskInfo(ctx context.Context) (blobstore.DiskInfo, error) {
-	return blobstore.DiskInfo{}, nil
+    // TODO: use real numbers
+	return blobstore.DiskInfo{
+		TotalSpace:     1000000000000000,
+		AvailableSpace: 1000000000000000,
+	}, nil
 }
 
 var _ blobstore.Blobs = &BlobStore{}
