@@ -13,11 +13,10 @@ import (
 	"math/rand"
 	"sort"
 	"storj.io/common/memory"
-	"testing"
-
 	"storj.io/common/testcontext"
 	"storj.io/common/testrand"
 	"storj.io/storj/storagenode/blobstore"
+	"testing"
 )
 
 const (
@@ -147,7 +146,6 @@ func TestStoreLoad(t *testing.T) {
 		err := store.Delete(ctx, ref)
 		require.NoError(t, err)
 	}
-
 	// try reading all the blobs
 	for _, ref := range refs {
 		_, err := store.Open(ctx, ref)

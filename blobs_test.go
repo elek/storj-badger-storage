@@ -1,13 +1,133 @@
 package badger
 
 import (
+	"context"
+	"fmt"
 	"github.com/stretchr/testify/require"
+	"github.com/zeebo/errs"
 	"io"
 	"storj.io/common/testcontext"
 	"storj.io/storj/storagenode/blobstore"
 	"testing"
 	"time"
 )
+
+func TestReadWrite(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
+	require.NoError(t, err)
+
+	ref1 := blobstore.BlobRef{
+		Namespace: []byte("ns"),
+		Key:       []byte("key1"),
+	}
+
+	out, err := store.Create(ctx, ref1)
+	require.NoError(t, err)
+	_, err = out.Write([]byte("1234567890"))
+	require.NoError(t, err)
+	require.NoError(t, out.Commit(ctx))
+
+	a, err := store.Open(ctx, ref1)
+	require.NoError(t, err)
+
+	all, err := io.ReadAll(a)
+	require.NoError(t, err)
+
+	require.Equal(t, []byte("1234567890"), all)
+}
+
+func ref(ns string, key string) blobstore.BlobRef {
+	return blobstore.BlobRef{
+		Namespace: []byte(ns),
+		Key:       []byte(key),
+	}
+}
+
+func save(ctx context.Context, store blobstore.Blobs, ref blobstore.BlobRef, raw string) error {
+	out, err := store.Create(ctx, ref)
+	if err != nil {
+		return errs.Wrap(err)
+	}
+	_, err = out.Write([]byte(raw))
+	if err != nil {
+		return errs.Wrap(err)
+	}
+	err = out.Commit(ctx)
+	if err != nil {
+		return errs.Wrap(err)
+	}
+	return nil
+}
+
+func TestWalkNamespace(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
+	require.NoError(t, err)
+
+	for i := 0; i < 6; i++ {
+		bytes := make([]byte, i)
+		err = save(ctx, store, ref("ns1", fmt.Sprintf("key%d", i)), string(bytes))
+		require.NoError(t, err)
+	}
+
+	err = store.WalkNamespace(ctx, []byte("ns1"), "", func(info blobstore.BlobInfo) error {
+		fileInfo, err := info.Stat(ctx)
+		if err != nil {
+			return errs.Wrap(err)
+		}
+		require.True(t, time.Since(fileInfo.ModTime()) < 1*time.Minute)
+		require.Equal(t, fmt.Sprintf("key%d", fileInfo.Size()), string(info.BlobRef().Key))
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestDelete(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	store, err := NewBlobStore(ctx.Dir(t.TempDir()))
+	require.NoError(t, err)
+
+	for i := 0; i < 100; i++ {
+		ref1 := blobstore.BlobRef{
+			Namespace: []byte("ns"),
+			Key:       []byte(fmt.Sprintf("key%d", i)),
+		}
+
+		out, err := store.Create(ctx, ref1)
+		require.NoError(t, err)
+		_, err = out.Write([]byte("123456789012345678901234567890123456789012345678901234567890"))
+		require.NoError(t, err)
+		require.NoError(t, out.Commit(ctx))
+	}
+
+	for i := 0; i < 100; i++ {
+		ref1 := blobstore.BlobRef{
+			Namespace: []byte("ns"),
+			Key:       []byte(fmt.Sprintf("key%d", i)),
+		}
+
+		err = store.Delete(ctx, ref1)
+		require.NoError(t, err)
+	}
+
+	for i := 0; i < 100; i++ {
+		ref1 := blobstore.BlobRef{
+			Namespace: []byte("ns"),
+			Key:       []byte(fmt.Sprintf("key%d", i)),
+		}
+
+		_, err = store.Open(ctx, ref1)
+		require.Error(t, err)
+	}
+
+}
 
 func TestMoveToTrash(t *testing.T) {
 	ctx := testcontext.New(t)
@@ -44,7 +164,6 @@ func TestMoveToTrash(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []byte("1234567890"), all)
-
 }
 
 func TestWriteWithSeek(t *testing.T) {

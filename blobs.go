@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v4"
+	"github.com/pkg/errors"
 	"github.com/zeebo/errs"
 	"golang.org/x/sys/unix"
 	"os"
@@ -14,11 +15,6 @@ import (
 	"storj.io/storj/storagenode/blobstore/filestore"
 	"time"
 )
-
-var namespacePrefix = []byte("nmspc")
-var blobPrefix = []byte("blobs")
-var trashPrefix = []byte("trash")
-var statPrefix = []byte("stats")
 
 var verificationFileName = "storage-badger-verification"
 
@@ -33,18 +29,17 @@ func (b *BlobStore) CheckWritability(ctx context.Context) error {
 }
 
 func (b *BlobStore) DeleteTrashNamespace(ctx context.Context, namespace []byte) (err error) {
-	//TODO implement me
-	panic("implement me")
+	//TODO: this would help to forget satellite
+	return nil
 }
 
 func (b *BlobStore) TryRestoreTrashBlob(ctx context.Context, ref blobstore.BlobRef) error {
-	//TODO implement me
-	panic("implement me")
+	// TODO: restore blob
+	return nil
 }
 
 func (b *BlobStore) DiskInfo(ctx context.Context) (blobstore.DiskInfo, error) {
-	//TODO implement me
-	panic("implement me")
+	return blobstore.DiskInfo{}, nil
 }
 
 var _ blobstore.Blobs = &BlobStore{}
@@ -87,7 +82,17 @@ func (b *BlobStore) OpenWithStorageFormat(ctx context.Context, ref blobstore.Blo
 
 func (b *BlobStore) Delete(ctx context.Context, ref blobstore.BlobRef) error {
 	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete(key(ref))
+		pref := keyPrefix(ref)
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: pref})
+		defer it.Close()
+
+		for it.Seek(pref); it.ValidForPrefix(pref); it.Next() {
+			key := it.Item().KeyCopy(nil)
+			if err := txn.Delete(key); err != nil {
+				return fmt.Errorf("error deleting key %s: %w", string(key), err)
+			}
+		}
+		return nil
 	})
 }
 
@@ -116,7 +121,24 @@ func (b *BlobStore) DeleteNamespace(ctx context.Context, ref []byte) (err error)
 
 func (b *BlobStore) Trash(ctx context.Context, ref blobstore.BlobRef, timestamp time.Time) error {
 	return b.db.Update(func(txn *badger.Txn) error {
-		return b.move(txn, key(ref), trashKey(ref))
+		pref := keyPrefix(ref)
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: pref})
+		defer it.Close()
+
+		for it.Seek(pref); it.ValidForPrefix(pref); it.Next() {
+			key := it.Item().Key()
+			err := it.Item().Value(func(val []byte) error {
+				// we replace the prefix blobs with prefix trash
+				return txn.Set(append(trashPrefix, key[5:]...), val)
+			})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			if err := txn.Delete(key); err != nil {
+				return fmt.Errorf("error deleting key %s: %w", string(key), err)
+			}
+		}
+		return nil
 	})
 }
 
@@ -172,22 +194,20 @@ func (b *BlobStore) EmptyTrash(ctx context.Context, namespace []byte, trashedBef
 }
 
 func (b *BlobStore) Stat(ctx context.Context, ref blobstore.BlobRef) (blobstore.BlobInfo, error) {
-	var size int64
+	info := BlobInfo{}
+	pref := keyPrefix(ref)
 	err := b.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(key(ref))
-		if err != nil {
-			return errs.Wrap(err)
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: pref})
+		defer it.Close()
+
+		for it.Seek(pref); it.ValidForPrefix(pref); {
+
+			break
+
 		}
-		err = item.Value(func(val []byte) error {
-			size = int64(len(val))
-			return nil
-		})
-		return err
+		return nil
 	})
-	return BlobInfo{
-		ref:  ref,
-		size: size,
-	}, err
+	return info, err
 }
 
 func (b *BlobStore) StatWithStorageFormat(ctx context.Context, ref blobstore.BlobRef, formatVer blobstore.FormatVersion) (blobstore.BlobInfo, error) {
@@ -250,14 +270,18 @@ func (b *BlobStore) WalkNamespace(ctx context.Context, namespace []byte, startFr
 		defer it.Close()
 		for it.Seek(ns(namespace)); it.ValidForPrefix(ns(namespace)); it.Next() {
 			item := it.Item()
+			key := item.KeyCopy(nil)
+			blobKey := key[len(ns(namespace)) : len(key)-16]
+			t, s := stat(key)
 			err := walkFunc(BlobInfo{
 				ref: blobstore.BlobRef{
 					Namespace: namespace,
-					Key:       item.Key()[len(ns(namespace)):],
+					Key:       blobKey,
 				},
-				name: string(item.Key()[len(ns(namespace)):]),
+				name: string(blobKey),
 				// This is just estimation!!!!
-				size: item.ValueSize(),
+				size:    int64(s),
+				modTime: t,
 			})
 			if err != nil {
 				return err

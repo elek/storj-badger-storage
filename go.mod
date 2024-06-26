@@ -4,6 +4,8 @@ go 1.19
 
 require (
 	github.com/dgraph-io/badger/v3 v3.2103.5
+	github.com/dgraph-io/badger/v4 v4.2.0
+	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/zeebo/errs v1.3.0
 	golang.org/x/sys v0.21.0
@@ -25,7 +27,6 @@ require (
 	github.com/google/flatbuffers v23.5.26+incompatible // indirect
 	github.com/google/pprof v0.0.0-20230602150820-91b7bce49751 // indirect
 	github.com/klauspost/compress v1.17.7 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/spacemonkeygo/monkit/v3 v3.0.23 // indirect
 	go.opencensus.io v0.24.0 // indirect

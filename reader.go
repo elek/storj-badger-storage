@@ -1,7 +1,9 @@
 package badger
 
 import (
-	badger "github.com/dgraph-io/badger/v3"
+	badger "github.com/dgraph-io/badger/v4"
+	"github.com/pkg/errors"
+	"github.com/zeebo/errs"
 	"io"
 	"storj.io/storj/storagenode/blobstore"
 	"storj.io/storj/storagenode/blobstore/filestore"
@@ -17,19 +19,35 @@ var _ blobstore.BlobReader = &reader{}
 
 func NewReader(db *badger.DB, ref blobstore.BlobRef) (blobstore.BlobReader, error) {
 	r := reader{}
+	r.buffer = make([]byte, 0)
+	var found bool
 	err := db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(key(ref))
-		if err != nil {
-			return err
-		}
-		r.buffer = make([]byte, 0)
-		r.buffer, err = item.ValueCopy(r.buffer)
-		r.length = len(r.buffer)
-		return err
+		pref := keyPrefix(ref)
+		it := txn.NewIterator(badger.IteratorOptions{
+			PrefetchSize:   1,
+			PrefetchValues: true,
+			Prefix:         pref,
+		})
+		defer it.Close()
 
+		for it.Seek(pref); it.ValidForPrefix(pref); {
+			var err error
+			r.buffer, err = it.Item().ValueCopy(r.buffer)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			found = true
+			break
+		}
+
+		r.length = len(r.buffer)
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, errs.New("missing blob")
 	}
 	return &r, nil
 }

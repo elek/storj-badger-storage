@@ -2,10 +2,11 @@ package badger
 
 import (
 	"context"
-	badger "github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/zeebo/errs"
 	"io"
 	"storj.io/storj/storagenode/blobstore/filestore"
+	"time"
 
 	"storj.io/storj/storagenode/blobstore"
 )
@@ -46,19 +47,11 @@ func (w *writer) Commit(ctx context.Context) error {
 		return errs.New("Already committed")
 	}
 	err := w.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(key(w.ref), w.buffer[:w.offset])
+		return txn.Set(key(w.ref, time.Now(), w.offset), w.buffer[:w.offset])
 	})
 	w.buffer = nil
 	return err
 
-}
-
-func key(ref blobstore.BlobRef) []byte {
-	return append(append(blobPrefix, ref.Namespace...), ref.Key...)
-}
-
-func trashKey(ref blobstore.BlobRef) []byte {
-	return append(append(trashPrefix, ref.Namespace...), ref.Key...)
 }
 
 func (w *writer) Size() (int64, error) {
