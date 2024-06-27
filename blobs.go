@@ -39,7 +39,7 @@ func (b *BlobStore) TryRestoreTrashBlob(ctx context.Context, ref blobstore.BlobR
 }
 
 func (b *BlobStore) DiskInfo(ctx context.Context) (blobstore.DiskInfo, error) {
-    // TODO: use real numbers
+	// TODO: use real numbers
 	return blobstore.DiskInfo{
 		TotalSpace:     1000000000000000,
 		AvailableSpace: 1000000000000000,
@@ -49,7 +49,10 @@ func (b *BlobStore) DiskInfo(ctx context.Context) (blobstore.DiskInfo, error) {
 var _ blobstore.Blobs = &BlobStore{}
 
 func NewBlobStore(dir string) (*BlobStore, error) {
-	db, err := badger.Open(badger.DefaultOptions(dir))
+	options := badger.DefaultOptions(dir)
+	options.ValueThreshold = 10
+	options.WithValueLogFileSize(10_000_000_000)
+	db, err := badger.Open(options)
 	if err != nil {
 		return nil, errs.Wrap(err)
 	}
